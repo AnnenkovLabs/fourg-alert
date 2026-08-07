@@ -66,7 +66,12 @@ class AppState {
   // CoverageEvent? _currentZoneStart;
 
   /// Start all services and monitoring.
+  bool _started = false;
+
   Future<void> start() async {
+    if (_started) return;
+    _started = true;
+
     // Subscribe to location updates
     location.stream.listen(_onLocationUpdate);
 
@@ -261,6 +266,7 @@ class AppState {
   }
 
   void stop() {
+    _started = false;
     location.stop();
     network.stop();
     notifications.cancelOngoingStatus();

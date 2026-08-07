@@ -34,11 +34,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     Future.microtask(() async {
-      while (!appState.isReady) {
+      // Wait for coverage data only — GPS can come later
+      while (!appState.coverage.isLoaded) {
         await Future.delayed(const Duration(milliseconds: 100));
       }
       if (!mounted) return;
       setState(() => _loading = false);
+      // Auto-start monitoring
+      _startMonitoring();
     });
   }
 

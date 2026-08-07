@@ -15,6 +15,10 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     defaultConfig {
         applicationId = "com.fourgalert.fourg_alert"
         minSdk = 21

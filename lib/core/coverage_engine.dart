@@ -80,6 +80,7 @@ class CoverageEngine {
     _loaded = true;
 
     // Verify header
+    // Format: magic(4B) + version(2B) + gh_bits(1B) + cell_count(4B) + reserved(5B) = 16B
     final magic = String.fromCharCodes([
       _data!.getUint8(0), _data!.getUint8(1),
       _data!.getUint8(2), _data!.getUint8(3),
@@ -88,9 +89,10 @@ class CoverageEngine {
     if (_data!.getUint16(4, Endian.little) != 1) {
       throw FormatException('Bad version');
     }
-    _cellCount = _data!.getUint32(8, Endian.little);
+    _cellCount = _data!.getUint32(7, Endian.little);
 
     // Load operator bitmask file
+    // Format: magic(4B) + version(2B) + count(4B) + reserved(6B) = 16B
     try {
       final opsBytes = await rootBundle.load('assets/coverage_ops.bin');
       _opsData = opsBytes.buffer.asByteData();
@@ -164,7 +166,7 @@ class CoverageEngine {
     if (_opsData != null && _opsCount > 0) {
       // Binary search in ops file (same geohash ordering)
       int lo = 0, hi = _opsCount - 1;
-      const opsHeader = 12;
+      const opsHeader = 16;
       const opsRecord = 5; // 4 bytes geohash + 1 byte mask
       while (lo <= hi) {
         final mid = (lo + hi) ~/ 2;

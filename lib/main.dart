@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'core/coverage_engine.dart';
@@ -9,36 +10,69 @@ import 'services/app_state.dart';
 import 'services/globals.dart';
 import 'ui/screens/home_screen.dart';
 
+String? _initError;
+
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Catch ALL errors so Flutter can still render something useful
+  await runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-  ]);
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
 
-  // Init services
-  final coverage = CoverageEngine();
-  final location = LocationService();
-  final network = NetworkMonitor();
-  final notifications = NotificationService();
+    final coverage = CoverageEngine();
+    final location = LocationService();
+    final network = NetworkMonitor();
+    final notifications = NotificationService();
 
-  await notifications.init();
-  await coverage.load();
+    // Init notifications (this may work even if coverage fails)
+    try {
+      await notifications.init();
+    } catch (e) {
+      debugPrint('Notification init failed: $e');
+      // Non-fatal — app can work without TTS/push
+    }
 
-  // Create app state coordinator
-  setAppState(AppState(
-    coverage: coverage,
-    location: location,
-    network: network,
-    predictor: RoutePredictor(coverage),
-    notifications: notifications,
-  ));
+    // Load coverage data
+    try {
+      await coverage.load();
+    } catch (e) {
+      debugPrint('Coverage load failed: $e');
+      _initError = 'Failed to load coverage data: $e';
+      // Mark as loaded with a synthetic error state so the UI shows something
+      // The coverage engine's _loaded flag won't be true; we handle this in the UI
+    }
 
-  runApp(const FourGAlertApp());
+    // Create app state coordinator (even with partial init)
+    setAppState(AppState(
+      coverage: coverage,
+      location: location,
+      network: network,
+      predictor: RoutePredictor(coverage),
+      notifications: notifications,
+    ));
+
+    // Set up global error handler for Flutter framework errors
+    FlutterError.onError = (details) {
+      FlutterError.presentError(details);
+      debugPrint('FlutterError: ${details.exception}');
+      debugPrint('Stack: ${details.stack}');
+    };
+
+    runApp(FourGAlertApp(initError: _initError));
+  }, (error, stack) {
+    // Catch errors from isolates / async gaps
+    debugPrint('Unhandled error: $error');
+    debugPrint('Stack: $stack');
+    _initError = 'Unexpected error: $error';
+    runApp(FourGAlertApp(initError: _initError));
+  });
 }
 
 class FourGAlertApp extends StatelessWidget {
-  const FourGAlertApp({super.key});
+  final String? initError;
+  const FourGAlertApp({super.key, this.initError});
 
   @override
   Widget build(BuildContext context) {
@@ -52,7 +86,7 @@ class FourGAlertApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: HomeScreen(initError: initError),
     );
   }
 }

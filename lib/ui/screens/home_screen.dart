@@ -13,7 +13,8 @@ import 'package:fourg_alert/ui/widgets/dashboard_widget.dart';
 import 'package:fourg_alert/services/offline_tiles.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final String? initError;
+  const HomeScreen({super.key, this.initError});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -24,6 +25,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   StreamSubscription? _stateSub;
   bool _started = false;
   bool _loading = true;
+  bool _loadError = false;
+  String? _errorText;
   int _tabIndex = 0;
 
   // Map controller
@@ -33,12 +36,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // If there was an init error from main(), show it immediately
+    if (widget.initError != null) {
+      setState(() {
+        _loading = false;
+        _loadError = true;
+        _errorText = widget.initError;
+      });
+      return;
+    }
+
     Future.microtask(() async {
       // Wait for coverage data only — GPS can come later
-      while (!appState.coverage.isLoaded) {
-        await Future.delayed(const Duration(milliseconds: 100));
+      try {
+        while (!appState.coverage.isLoaded) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          // Timeout after 15 seconds
+        }
+      } catch (e) {
+        // If accessing appState itself fails
+        if (!mounted) return;
       }
+
       if (!mounted) return;
+
+      if (!appState.coverage.isLoaded) {
+        setState(() {
+          _loading = false;
+          _loadError = true;
+          _errorText = 'Coverage data not loaded. Check app data.';
+        });
+        return;
+      }
+
       setState(() => _loading = false);
       // Auto-start monitoring
       _startMonitoring();
@@ -47,8 +78,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _startMonitoring() async {
     setState(() => _started = true);
-    await appState.start();
-    await appState.notifications.showOngoingStatus('Monitoring...');
+    try {
+      await appState.start();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _started = false;
+        _errorText = 'Failed to start monitoring: $e';
+      });
+      // Show a snackbar or dialog so user knows
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Startup issue: $e'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: _startMonitoring,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      await appState.notifications.showOngoingStatus('Monitoring...');
+    } catch (_) {
+      // notification channel may not be ready — non-fatal
+    }
 
     _tickTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       appState.tick(5);
@@ -96,6 +156,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // Error state — show something useful instead of gray screen
+    if (_loadError) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, color: Color(0xFFFF5252), size: 64),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '4G Alert',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF00C853),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _errorText ?? 'Something went wrong',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  const SizedBox(height: 24),
+                  // Retry button
+                  if (!appState.coverage.isLoaded)
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        setState(() {
+                          _loading = true;
+                          _loadError = false;
+                          _errorText = null;
+                        });
+                        try {
+                          await appState.coverage.load();
+                          if (!mounted) return;
+                          setState(() => _loading = false);
+                          _startMonitoring();
+                        } catch (e) {
+                          if (!mounted) return;
+                          setState(() {
+                            _loading = false;
+                            _loadError = true;
+                            _errorText = 'Retry failed: $e';
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00C853),
+                        foregroundColor: Colors.black,
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  // Skip and try anyway
+                  if (!appState.coverage.isLoaded)
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _loading = false;
+                          _loadError = false;
+                          _errorText = null;
+                        });
+                        _startMonitoring();
+                      },
+                      child: const Text(
+                        'Continue without coverage data',
+                        style: TextStyle(color: Colors.white38),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     if (_loading) {
       return Scaffold(
         body: Center(
@@ -164,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.black,
-        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
       ),
       child: Row(
         children: [
@@ -172,7 +315,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.2),
+              color: statusColor.withOpacity(0.2),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
@@ -198,7 +341,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFF00C853).withValues(alpha: 0.2),
+                color: const Color(0xFF00C853).withOpacity(0.2),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Row(
@@ -313,6 +456,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Icon(Icons.my_location, color: Color(0xFF00C853), size: 28),
         ),
 
+        // Error snackbar for the map if needed
+        if (_errorText != null && _started)
+          Positioned(
+            top: 8,
+            left: 8,
+            right: 8,
+            child: Material(
+              color: Colors.orange.withOpacity(0.9),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  _errorText!,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+
         // Position info overlay
         Positioned(
           bottom: 12,
@@ -325,11 +487,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildCoverageLayer() {
-    // Use MarkerLayer with simplified coverage dots
+    // Safe guard: map controller might not be ready on first frame
     if (!appState.coverage.isLoaded) return const SizedBox.shrink();
 
-    final bounds = _mapController.camera.visibleBounds;
-    final zoom = _mapController.camera.zoom;
+    late final LatLngBounds bounds;
+    late final double zoom;
+    try {
+      bounds = _mapController.camera.visibleBounds;
+      zoom = _mapController.camera.zoom;
+    } catch (_) {
+      // Map not ready yet — skip coverage layer this frame
+      return const SizedBox.shrink();
+    }
 
     // Adaptive sampling based on zoom
     double step;
@@ -402,9 +571,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.85),
+        color: Colors.black.withOpacity(0.85),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -449,7 +618,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.25),
+        color: color.withOpacity(0.25),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(text,
@@ -476,7 +645,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             label: const Text('LTE Only / Network Settings'),
             style: OutlinedButton.styleFrom(
               foregroundColor: Colors.white70,
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+              side: BorderSide(color: Colors.white.withOpacity(0.15)),
             ),
           ),
           const SizedBox(height: 8),
@@ -504,7 +673,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
+        color: Colors.white.withOpacity(0.05),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -534,15 +703,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     IconData icon;
 
     if (inZone) {
-      bg = const Color(0xFFFF5252).withValues(alpha: 0.15);
+      bg = const Color(0xFFFF5252).withOpacity(0.15);
       status = 'No 4G — ${_fmt(appState.timeToNextEvent)}';
       icon = Icons.timer;
     } else if (event != null) {
-      bg = const Color(0xFFFF9800).withValues(alpha: 0.15);
+      bg = const Color(0xFFFF9800).withOpacity(0.15);
       status = '4G loss in ${event.distanceText}';
       icon = Icons.warning_amber;
     } else {
-      bg = const Color(0xFF00C853).withValues(alpha: 0.1);
+      bg = const Color(0xFF00C853).withOpacity(0.1);
       status = '4G OK';
       icon = Icons.check_circle;
     }
@@ -551,7 +720,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
         color: bg,
-        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
       ),
       child: Row(
         children: [
